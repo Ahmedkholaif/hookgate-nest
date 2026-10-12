@@ -1,0 +1,116 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate_test }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+        env: { TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/hookgate_test" }
+
+  # The broker conformance suite plus a full pipeline smoke test on each real broker.
+  broker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        broker: [rabbitmq, sqs, pubsub]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    env:
+      BROKER: ${{ matrix.broker }}
+      AMQP_URL: amqp://guest:guest@localhost:5672/
+      SQS_ENDPOINT: http://localhost:9324
+      PUBSUB_EMULATOR_HOST: localhost:8085
+      PUBSUB_PROJECT: hookgate-local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci && npm run build
+      - name: start ${{ matrix.broker }}
+        run: |
+          case "$BROKER" in
+            rabbitmq) docker run -d --user rabbitmq -p 5672:5672 rabbitmq:4-management-alpine
+                      until nc -z localhost 5672; do sleep 1; done; sleep 5 ;;
+            sqs)      docker run -d -p 9324:9324 softwaremill/elasticmq-native
+                      until nc -z localhost 9324; do sleep 1; done ;;
+            pubsub)   docker run -d -p 8085:8085 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+                        gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=hookgate-local
+                      until curl -sf localhost:8085 >/dev/null; do sleep 1; done ;;
+          esac
+      - run: BROKER_TEST=$BROKER node --test dist/broker/broker.test.js
+      - name: pipeline smoke test (1 api + 2 worker processes)
+        run: |
+          export DATABASE_URL=postgres://postgres:postgres@localhost:5432/hookgate
+          export SINK_TOPICS=billing,crm,audit CHAOS_FAIL_TYPES=payment.flaky MAX_ATTEMPTS=3 RETRY_BASE_MS=200
+          ROLES=api PORT=3000 node dist/main.js > api.log 2>&1 &
+          ROLES=relay,processor,sink PORT=3001 node dist/main.js > w1.log 2>&1 &
+          ROLES=relay,processor,sink PORT=3002 node dist/main.js > w2.log 2>&1 &
+          until curl -sf localhost:3000/healthz >/dev/null; do sleep 1; done
+          scripts/smoke.sh http://localhost:3000
+      - if: failure()
+        run: tail -n 50 *.log
+
+  # Run hookgate (Go) and this service on ONE database and ONE broker with the
+  # pipeline split between them, both ways round, and prove they act as one system.
+  interop:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { broker: rabbitmq, go_roles: "api,relay", nest_roles: "api,processor,sink", actors: "go/relay nest/processor nest/sink" }
+          - { broker: sqs, go_roles: "api,processor,sink", nest_roles: "api,relay", actors: "nest/relay go/processor go/sink" }
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: hookgate }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 20
+    env:
+      DB: postgres://postgres:postgres@localhost:5432/hookgate
+      BROKER: ${{ matrix.broker }}
+      AMQP_URL: amqp://guest:guest@localhost:5672/
+      SQS_ENDPOINT: http://localhost:9324
+      SINK_TOPICS: billing,audit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: npm ci && npm run build
+      - run: GOPROXY=direct go install github.com/Ahmedkholaif/hookgate/cmd/hookgate@main
+      - name: start broker
+        run: |
+          if [ "$BROKER" = rabbitmq ]; then
+            docker run -d --user rabbitmq -p 5672:5672 rabbitmq:4-management-alpine
+            until nc -z localhost 5672; do sleep 1; done; sleep 5
+          else
+            docker run -d -p 9324:9324 softwaremill/elasticmq-native
+            until nc -z localhost 9324; do sleep 1; done
+          fi
+      - name: start both services
+        run: |
+          DATABASE_URL="$DB?sslmode=disable" ROLES=${{ matrix.go_roles }} ADDR=:8080 hookgate > go.log 2>&1 &
+          sleep 2
+          DATABASE_URL=$DB ROLES=${{ matrix.nest_roles }} PORT=3000 node dist/main.js > nest.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:3000/healthz && curl -sf localhost:8080/healthz && break; sleep 1; done
+      - run: EXPECT_ACTORS="${{ matrix.actors }}" scripts/interop.sh
+      - if: failure()
+        run: tail -n 50 go.log nest.log

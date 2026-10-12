@@ -1,0 +1,21 @@
+# Adds hookgate (Go) workers next to the NestJS ones: both implementations
+# compete on the same queues and share one outbox.
+#   docker compose -f compose.yaml -f compose.rabbitmq.yaml -f compose.mixed.yaml up --build
+# HOOKGATE_GO_CONTEXT can point at a local checkout, e.g. ../hookgate.
+services:
+  worker-go:
+    build: ${HOOKGATE_GO_CONTEXT:-https://github.com/Ahmedkholaif/hookgate.git#main}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/hookgate?sslmode=disable
+      ROLES: relay,processor,sink
+      SINK_TOPICS: billing,crm,audit
+      CHAOS_FAIL_TYPES: payment.flaky
+      MAX_ATTEMPTS: "4"
+      RETRY_BASE_MS: "500"
+      BROKER: rabbitmq
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    deploy: { replicas: 2 }
