@@ -5,6 +5,8 @@ export type Role = 'api' | 'relay' | 'processor' | 'sink';
 /** Same environment variables and defaults as hookgate (Go). */
 export interface AppConfig {
   databaseUrl: string;
+  dbMaxConns: number;
+  retentionDays: number; // 0 = keep forever
   roles: Role[];
   eventsTopic: string;
   apiKey?: string;
@@ -32,6 +34,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   return {
     databaseUrl: env.DATABASE_URL ?? 'postgres://postgres:postgres@localhost:5432/hookgate',
+    dbMaxConns: int(env.DB_MAX_CONNS, 20),
+    retentionDays: env.RETENTION_DAYS === '0' ? 0 : int(env.RETENTION_DAYS, 14),
     roles: roles as Role[],
     eventsTopic: env.EVENTS_TOPIC || 'hookgate-events',
     apiKey: env.API_KEY || undefined,

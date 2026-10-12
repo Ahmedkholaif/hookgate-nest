@@ -405,6 +405,38 @@ export class StoreService {
     return rows.map(({ detail, ...r }) => (detail ? { status: r.status, detail, actor: r.actor, at: r.at } : r));
   }
 
+  /**
+   * Deletes status-log entries and inbox rows older than the retention, in
+   * small batches. An advisory lock keeps it to one process at a time; events
+   * and messages themselves are kept.
+   */
+  async prune(retentionDays: number): Promise<number> {
+    const client = await this.db.pool.connect();
+    try {
+      const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [727_300_002]);
+      if (!rows[0].locked) return 0;
+      let total = 0;
+      try {
+        for (const q of [
+          `DELETE FROM status_log WHERE id IN (SELECT id FROM status_log WHERE at < now() - $1 * interval '1 day' LIMIT 5000)`,
+          `DELETE FROM inbox WHERE (consumer, message_id) IN (
+             SELECT consumer, message_id FROM inbox WHERE processed_at < now() - $1 * interval '1 day' LIMIT 5000)`,
+        ]) {
+          for (;;) {
+            const n = (await client.query(q, [retentionDays])).rowCount ?? 0;
+            total += n;
+            if (n < 5000) break;
+          }
+        }
+      } finally {
+        await client.query('SELECT pg_advisory_unlock($1)', [727_300_002]);
+      }
+      return total;
+    } finally {
+      client.release();
+    }
+  }
+
   async stats() {
     // Alphabetical, like Go's JSON encoding of maps, so both services return identical bodies.
     const events: Record<string, number> = { dead: 0, processed: 0, queued: 0, received: 0, retrying: 0 };

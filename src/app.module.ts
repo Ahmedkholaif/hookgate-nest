@@ -31,7 +31,7 @@ export class AppModule {
     const api = cfg.roles.includes('api');
     return {
       module: AppModule,
-      imports: [DatabaseModule.forRoot({ url: cfg.databaseUrl })],
+      imports: [DatabaseModule.forRoot({ url: cfg.databaseUrl, maxConnections: cfg.dbMaxConns })],
       controllers: api ? [HealthController, IngestController, AdminController] : [HealthController],
       providers: [
         StoreService,

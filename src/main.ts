@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 
 // ROLES=api,relay,processor,sink (default: all four), exactly as in the Go service.
 const cfg = loadConfig();
+if (cfg.roles.includes('api') && !cfg.apiKey) console.warn('API_KEY is not set: the admin API (/v1/*) is open to anyone who can reach it');
 const broker = cfg.roles.some((r) => r !== 'api') ? await openBroker() : null;
 const app = configureApp(await NestFactory.create(AppModule.forRoot(cfg, broker), { bodyParser: false }));
 await app.listen(Number(process.env.PORT ?? 3000));

@@ -67,4 +67,6 @@ make test    # needs Postgres; TEST_DATABASE_URL in the Makefile
 
 Identical to [hookgate](https://github.com/Ahmedkholaif/hookgate#api). The only difference is the HTTP port: `PORT` (default `3000`) instead of `ADDR`.
 
+For deployment, tuning (`DB_MAX_CONNS`, concurrency), retention (`RETENTION_DAYS`), monitoring and the runbook, see the shared **[operations guide](https://github.com/Ahmedkholaif/hookgate/blob/main/docs/operations.md)**.
+
 MIT licensed.

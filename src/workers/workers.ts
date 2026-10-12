@@ -190,18 +190,36 @@ export class WorkerRunner implements OnApplicationBootstrap, BeforeApplicationSh
     private readonly relay: RelayWorker,
     private readonly processor: ProcessorWorker,
     private readonly sink: SinkWorker,
+    private readonly store: StoreService,
   ) {}
 
   onApplicationBootstrap() {
     const { roles } = this.cfg;
     const signal = this.abort.signal;
-    if (roles.includes('relay')) this.running.push(this.relay.run(signal));
+    if (roles.includes('relay')) {
+      this.running.push(this.relay.run(signal));
+      if (this.cfg.retentionDays > 0) this.running.push(this.janitor(signal));
+    }
     if (roles.includes('processor')) this.running.push(this.processor.run(signal));
     if (roles.includes('sink')) {
       if (this.cfg.sink.topics.length) this.running.push(this.sink.run(signal));
       else this.log.log('sink: SINK_TOPICS is empty; nothing to consume');
     }
     this.log.log(`hookgate-nest started: roles=${roles.join(',')} broker=${this.broker.name} events_topic=${this.cfg.eventsTopic}`);
+  }
+
+  /** Prunes old timelines and inbox rows every 10 minutes (one process at a time). */
+  private async janitor(signal: AbortSignal) {
+    while (!signal.aborted) {
+      await sleep(600_000, undefined, { signal }).catch(() => undefined);
+      if (signal.aborted) return;
+      try {
+        const n = await this.store.prune(this.cfg.retentionDays);
+        if (n) this.log.log(`pruned ${n} rows older than ${this.cfg.retentionDays} days`);
+      } catch (err) {
+        this.log.error(`prune: ${(err as Error).message}`);
+      }
+    }
   }
 
   async beforeApplicationShutdown() {

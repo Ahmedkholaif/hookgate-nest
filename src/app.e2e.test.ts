@@ -213,6 +213,14 @@ describe('hookgate-nest against PostgreSQL', { skip: !DB && 'TEST_DATABASE_URL n
     await waitFor('replayed and delivered', (s) => s.events.processed === 1 && s.messages.delivered === 1);
   });
 
+  it('prunes old timeline and inbox rows, keeping recent ones', async () => {
+    await db.query(`INSERT INTO status_log (ref_id, status, actor, at) VALUES (gen_random_uuid(), 'old', 'nest/test', now() - interval '20 days'), (gen_random_uuid(), 'new', 'nest/test', now())`);
+    await db.query(`INSERT INTO inbox (consumer, message_id, processed_at) VALUES ('c', 'old', now() - interval '20 days'), ('c', 'new', now())`);
+    assert.equal(await store.prune(14), 2);
+    assert.equal(await count(`SELECT count(*) FROM status_log WHERE status = 'new'`), 1);
+    assert.equal(await count(`SELECT count(*) FROM inbox WHERE message_id = 'new'`), 1);
+  });
+
   it('validates admin input like the Go service', async () => {
     assert.equal((await req('POST', '/v1/sources', { name: 'Bad Name' })).status, 400);
     assert.equal((await req('POST', '/v1/sources', { name: 'ok', bogus: 1 })).status, 400);
