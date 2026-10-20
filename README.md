@@ -4,7 +4,7 @@
 
 **Webhook ingestion and fan-out in NestJS.** hookgate-nest verifies and dedupes incoming webhooks, queues them on **RabbitMQ, Amazon SQS or Google Pub/Sub**, processes them with retries and dead-lettering, and pushes the resulting messages over the same queues. Every message has its own status and timeline.
 
-It is the NestJS twin of **[hookgate](https://github.com/Ahmedkholaif/hookgate)** (Go). Both services share the same HTTP API, the same Postgres schema (a byte-identical migration), the same wire envelope and the same deterministic message ids. CI runs them **on one database and one broker with the pipeline split between them**: Go relays and NestJS processes, then the other way round. It asserts that every message is delivered exactly once, and that a webhook ingested by one service is rejected as a duplicate by the other.
+It is the NestJS twin of **[hookgate](https://github.com/Ahmedkholaif/hookgate)** (Go). A framework-free version, **[hookgate-express](https://github.com/Ahmedkholaif/hookgate-express)**, maps each NestJS piece used here to plain Express. Both services share the same HTTP API, the same Postgres schema (a byte-identical migration), the same wire envelope and the same deterministic message ids. CI runs them **on one database and one broker with the pipeline split between them**: Go relays and NestJS processes, then the other way round. It asserts that every message is delivered exactly once, and that a webhook ingested by one service is rejected as a duplicate by the other.
 
 ```mermaid
 flowchart LR
